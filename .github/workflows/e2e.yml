@@ -42,6 +42,11 @@ jobs:
           echo "API health check failed"
           exit 1
 
+      - name: Install Machine API CRDs
+        run: |
+          kind get kubeconfig --name carbide-rest-local > /tmp/carbide-e2e-kubeconfig
+          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/crd/external/
+
       - name: Build and load provider image
         run: |
           make docker-build IMG=localhost/machine-api-provider-nvidia-carbide:e2e
