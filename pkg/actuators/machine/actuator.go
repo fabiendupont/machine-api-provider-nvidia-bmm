@@ -23,6 +23,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	machinev1beta1 "github.com/openshift/api/machine/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -392,25 +393,25 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 // Helper functions
 
 func (a *Actuator) getProviderSpec(machine client.Object) (*v1beta1.NvidiaCarbideMachineProviderSpec, error) {
-	// Cast to unstructured to access nested fields
-	unstructuredMachine, ok := machine.(*unstructured.Unstructured)
-	if !ok {
-		return nil, fmt.Errorf("machine is not unstructured")
-	}
+	var providerSpecBytes []byte
 
-	// Extract providerSpec.value from spec
-	providerSpecValue, found, err := unstructured.NestedFieldCopy(
-		unstructuredMachine.Object,
-		"spec", "providerSpec", "value",
-	)
-	if err != nil || !found {
-		return nil, fmt.Errorf("providerSpec.value not found: %w", err)
-	}
-
-	// Marshal and unmarshal to get typed struct
-	providerSpecBytes, err := json.Marshal(providerSpecValue)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal providerSpec: %w", err)
+	switch m := machine.(type) {
+	case *machinev1beta1.Machine:
+		if m.Spec.ProviderSpec.Value == nil {
+			return nil, fmt.Errorf("providerSpec.value is nil")
+		}
+		providerSpecBytes = m.Spec.ProviderSpec.Value.Raw
+	case *unstructured.Unstructured:
+		providerSpecValue, found, err := unstructured.NestedFieldCopy(m.Object, "spec", "providerSpec", "value")
+		if err != nil || !found {
+			return nil, fmt.Errorf("providerSpec.value not found: %w", err)
+		}
+		providerSpecBytes, err = json.Marshal(providerSpecValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal providerSpec: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported machine type: %T", machine)
 	}
 
 	providerSpec := &v1beta1.NvidiaCarbideMachineProviderSpec{}
@@ -422,30 +423,28 @@ func (a *Actuator) getProviderSpec(machine client.Object) (*v1beta1.NvidiaCarbid
 }
 
 func (a *Actuator) getProviderStatus(machine client.Object) (*v1beta1.NvidiaCarbideMachineProviderStatus, error) {
-	// Cast to unstructured to access nested fields
-	unstructuredMachine, ok := machine.(*unstructured.Unstructured)
-	if !ok {
-		return nil, fmt.Errorf("machine is not unstructured")
-	}
+	var providerStatusBytes []byte
 
-	// Extract providerStatus from status
-	providerStatusValue, found, err := unstructured.NestedFieldCopy(
-		unstructuredMachine.Object,
-		"status", "providerStatus",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get providerStatus: %w", err)
-	}
-
-	// If not found, return empty status (this is OK for new machines)
-	if !found {
-		return &v1beta1.NvidiaCarbideMachineProviderStatus{}, nil
-	}
-
-	// Marshal and unmarshal to get typed struct
-	providerStatusBytes, err := json.Marshal(providerStatusValue)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal providerStatus: %w", err)
+	switch m := machine.(type) {
+	case *machinev1beta1.Machine:
+		if m.Status.ProviderStatus == nil {
+			return &v1beta1.NvidiaCarbideMachineProviderStatus{}, nil
+		}
+		providerStatusBytes = m.Status.ProviderStatus.Raw
+	case *unstructured.Unstructured:
+		providerStatusValue, found, err := unstructured.NestedFieldCopy(m.Object, "status", "providerStatus")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get providerStatus: %w", err)
+		}
+		if !found {
+			return &v1beta1.NvidiaCarbideMachineProviderStatus{}, nil
+		}
+		providerStatusBytes, err = json.Marshal(providerStatusValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal providerStatus: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported machine type: %T", machine)
 	}
 
 	providerStatus := &v1beta1.NvidiaCarbideMachineProviderStatus{}
@@ -457,59 +456,51 @@ func (a *Actuator) getProviderStatus(machine client.Object) (*v1beta1.NvidiaCarb
 }
 
 func (a *Actuator) setProviderStatus(machine client.Object, status *v1beta1.NvidiaCarbideMachineProviderStatus) error {
-	// Cast to unstructured to access nested fields
-	unstructuredMachine, ok := machine.(*unstructured.Unstructured)
-	if !ok {
-		return fmt.Errorf("machine is not unstructured")
-	}
-
-	// Convert status to map
 	statusBytes, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("failed to marshal status: %w", err)
 	}
 
-	var statusMap map[string]interface{}
-	if err := json.Unmarshal(statusBytes, &statusMap); err != nil {
-		return fmt.Errorf("failed to unmarshal status to map: %w", err)
-	}
-
-	// Set providerStatus in status
-	if err := unstructured.SetNestedField(
-		unstructuredMachine.Object,
-		statusMap,
-		"status", "providerStatus",
-	); err != nil {
-		return fmt.Errorf("failed to set providerStatus: %w", err)
-	}
-
-	// Update the machine status
-	if err := a.client.Status().Update(context.Background(), unstructuredMachine); err != nil {
-		return fmt.Errorf("failed to update machine status: %w", err)
+	switch m := machine.(type) {
+	case *machinev1beta1.Machine:
+		m.Status.ProviderStatus = &runtime.RawExtension{Raw: statusBytes}
+		if err := a.client.Status().Update(context.Background(), m); err != nil {
+			return fmt.Errorf("failed to update machine status: %w", err)
+		}
+	case *unstructured.Unstructured:
+		var statusMap map[string]interface{}
+		if err := json.Unmarshal(statusBytes, &statusMap); err != nil {
+			return fmt.Errorf("failed to unmarshal status to map: %w", err)
+		}
+		if err := unstructured.SetNestedField(m.Object, statusMap, "status", "providerStatus"); err != nil {
+			return fmt.Errorf("failed to set providerStatus: %w", err)
+		}
+		if err := a.client.Status().Update(context.Background(), m); err != nil {
+			return fmt.Errorf("failed to update machine status: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported machine type: %T", machine)
 	}
 
 	return nil
 }
 
 func (a *Actuator) setProviderID(machine client.Object, providerID string) error {
-	// Cast to unstructured to access nested fields
-	unstructuredMachine, ok := machine.(*unstructured.Unstructured)
-	if !ok {
-		return fmt.Errorf("machine is not unstructured")
-	}
-
-	// Set spec.providerID
-	if err := unstructured.SetNestedField(
-		unstructuredMachine.Object,
-		providerID,
-		"spec", "providerID",
-	); err != nil {
-		return fmt.Errorf("failed to set providerID: %w", err)
-	}
-
-	// Update the machine
-	if err := a.client.Update(context.Background(), unstructuredMachine); err != nil {
-		return fmt.Errorf("failed to update machine: %w", err)
+	switch m := machine.(type) {
+	case *machinev1beta1.Machine:
+		m.Spec.ProviderID = &providerID
+		if err := a.client.Update(context.Background(), m); err != nil {
+			return fmt.Errorf("failed to update machine: %w", err)
+		}
+	case *unstructured.Unstructured:
+		if err := unstructured.SetNestedField(m.Object, providerID, "spec", "providerID"); err != nil {
+			return fmt.Errorf("failed to set providerID: %w", err)
+		}
+		if err := a.client.Update(context.Background(), m); err != nil {
+			return fmt.Errorf("failed to update machine: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported machine type: %T", machine)
 	}
 
 	return nil
