@@ -79,8 +79,13 @@ func getKeycloakToken() string {
 
 // createCredentialsSecret creates a Kubernetes secret with NVIDIA Carbide API credentials.
 func createCredentialsSecret(ctx context.Context, k8sClient client.Client, name, namespace, token string) *corev1.Secret {
-	endpoint := os.Getenv("NVIDIA_CARBIDE_API_ENDPOINT")
-	Expect(endpoint).NotTo(BeEmpty(), "NVIDIA_CARBIDE_API_ENDPOINT must be set")
+	// Use the in-cluster endpoint if available (for controllers running inside the cluster),
+	// otherwise fall back to the external endpoint.
+	endpoint := os.Getenv("NVIDIA_CARBIDE_API_ENDPOINT_INTERNAL")
+	if endpoint == "" {
+		endpoint = os.Getenv("NVIDIA_CARBIDE_API_ENDPOINT")
+	}
+	Expect(endpoint).NotTo(BeEmpty(), "NVIDIA_CARBIDE_API_ENDPOINT or NVIDIA_CARBIDE_API_ENDPOINT_INTERNAL must be set")
 
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
