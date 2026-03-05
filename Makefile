@@ -35,6 +35,11 @@ vet: ## Run go vet against code.
 test: ## Run tests.
 	go test ./... -coverprofile cover.out
 
+.PHONY: test-e2e-live
+test-e2e-live: ## Run e2e tests against live Carbide API.
+	KUBECONFIG=$$(kind get kubeconfig --name carbide-rest-local) \
+		go test -tags=e2e ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="live"
+
 ##@ Build
 
 .PHONY: build
