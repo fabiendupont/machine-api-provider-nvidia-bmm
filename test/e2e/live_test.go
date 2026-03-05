@@ -40,11 +40,7 @@ import (
 )
 
 const (
-	testSiteID   = "00000000-0000-0000-0000-000000000001"
-	testTenantID = "00000000-0000-0000-0000-000000000001"
-	testVpcID    = "00000000-0000-0000-0000-000000000001"
-	testSubnetID = "00000000-0000-0000-0000-000000000001"
-	testOrgName  = "test-org"
+	testOrgName = "test-org"
 
 	machineCreationTimeout = 5 * time.Minute
 	machineDeletionTimeout = 3 * time.Minute
@@ -96,16 +92,18 @@ var _ = Describe("Live Machine API Provider E2E", Label("live"), func() {
 		It("should create a Machine, verify provisioning, and delete it", func() {
 			machineName := fmt.Sprintf("e2e-live-machine-%d", time.Now().Unix())
 
+			By("Setting up infrastructure via Carbide API")
+			siteID, vpcID, subnetID := setupInfrastructureViaAPI(token, testOrgName, machineName)
+
 			By("Creating credentials secret")
 			secret := createCredentialsSecret(ctx, k8sClient, fmt.Sprintf("%s-creds", machineName), testNamespace, token)
 
 			By("Building provider spec")
 			providerSpec := &v1beta1.NvidiaCarbideMachineProviderSpec{
-				SiteID:         testSiteID,
-				TenantID:       testTenantID,
-				VpcID:          testVpcID,
-				SubnetID:       testSubnetID,
-				InstanceTypeID: "00000000-0000-0000-0000-000000000001",
+				SiteID:   siteID,
+				TenantID: siteID, // use siteID as tenantID for mock
+				VpcID:    vpcID,
+				SubnetID: subnetID,
 				CredentialsSecret: v1beta1.CredentialsSecretReference{
 					Name:      secret.Name,
 					Namespace: testNamespace,
@@ -184,6 +182,9 @@ var _ = Describe("Live Machine API Provider E2E", Label("live"), func() {
 
 			By("Cleaning up credentials secret")
 			Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+
+			By("Cleaning up infrastructure via Carbide API")
+			cleanupInfrastructureViaAPI(token, testOrgName, subnetID, vpcID, siteID)
 		})
 	})
 })

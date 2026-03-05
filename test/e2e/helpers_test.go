@@ -19,6 +19,7 @@ limitations under the License.
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -101,4 +102,124 @@ func createCredentialsSecret(ctx context.Context, k8sClient client.Client, name,
 	Expect(k8sClient.Create(ctx, secret)).To(Succeed())
 	_, _ = fmt.Fprintf(GinkgoWriter, "Created credentials secret %s/%s\n", namespace, name)
 	return secret
+}
+
+// carbideAPIRequest makes an authenticated request to the Carbide REST API.
+func carbideAPIRequest(method, path, token string, body interface{}) (map[string]interface{}, int) {
+	endpoint := os.Getenv("NVIDIA_CARBIDE_API_ENDPOINT")
+	Expect(endpoint).NotTo(BeEmpty())
+
+	var reqBody io.Reader
+	if body != nil {
+		jsonBytes, err := json.Marshal(body)
+		Expect(err).NotTo(HaveOccurred())
+		reqBody = bytes.NewReader(jsonBytes)
+	}
+
+	req, err := http.NewRequest(method, endpoint+path, reqBody)
+	Expect(err).NotTo(HaveOccurred())
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	Expect(err).NotTo(HaveOccurred())
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	Expect(err).NotTo(HaveOccurred())
+
+	var result map[string]interface{}
+	if len(respBody) > 0 {
+		_ = json.Unmarshal(respBody, &result)
+	}
+
+	_, _ = fmt.Fprintf(GinkgoWriter, "%s %s -> %d\n", method, path, resp.StatusCode)
+	return result, resp.StatusCode
+}
+
+// createVPCViaAPI creates a VPC via the Carbide REST API and returns its ID.
+func createVPCViaAPI(token, orgName, siteID, name string) string {
+	body := map[string]interface{}{
+		"name":   name,
+		"siteId": siteID,
+	}
+	result, status := carbideAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/vpc", orgName), token, body)
+	Expect(status).To(Equal(http.StatusCreated), "Failed to create VPC: %v", result)
+	vpcID, ok := result["id"].(string)
+	Expect(ok).To(BeTrue(), "VPC response missing id")
+	_, _ = fmt.Fprintf(GinkgoWriter, "Created VPC %s (id=%s)\n", name, vpcID)
+	return vpcID
+}
+
+// createIPBlockViaAPI creates an IP block via the Carbide REST API and returns its ID.
+func createIPBlockViaAPI(token, orgName, siteID, name string) string {
+	body := map[string]interface{}{
+		"name":            name,
+		"siteId":          siteID,
+		"prefix":          "10.0.0.0",
+		"prefixLength":    16,
+		"protocolVersion": "ipv4",
+		"routingType":     "datacenter_only",
+	}
+	result, status := carbideAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/ipblock", orgName), token, body)
+	Expect(status).To(Equal(http.StatusCreated), "Failed to create IP block: %v", result)
+	ipBlockID, ok := result["id"].(string)
+	Expect(ok).To(BeTrue(), "IP block response missing id")
+	_, _ = fmt.Fprintf(GinkgoWriter, "Created IP block %s (id=%s)\n", name, ipBlockID)
+	return ipBlockID
+}
+
+// createSubnetViaAPI creates a subnet via the Carbide REST API and returns its ID.
+func createSubnetViaAPI(token, orgName, vpcID, ipBlockID, name string) string {
+	body := map[string]interface{}{
+		"name":         name,
+		"vpcId":        vpcID,
+		"ipv4BlockId":  ipBlockID,
+		"prefixLength": 24,
+	}
+	result, status := carbideAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/subnet", orgName), token, body)
+	Expect(status).To(Equal(http.StatusCreated), "Failed to create subnet: %v", result)
+	subnetID, ok := result["id"].(string)
+	Expect(ok).To(BeTrue(), "Subnet response missing id")
+	_, _ = fmt.Fprintf(GinkgoWriter, "Created subnet %s (id=%s)\n", name, subnetID)
+	return subnetID
+}
+
+// setupInfrastructureViaAPI creates the full infrastructure chain (site, VPC, IP block, subnet)
+// via the Carbide REST API and returns the IDs needed for instance creation.
+func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, subnetID string) {
+	// Create site
+	siteBody := map[string]interface{}{
+		"name":        prefix + "-site",
+		"displayName": prefix + " E2E Site",
+	}
+	siteResult, siteStatus := carbideAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/site", orgName), token, siteBody)
+	Expect(siteStatus).To(Equal(http.StatusCreated), "Failed to create site: %v", siteResult)
+	siteID = siteResult["id"].(string)
+	_, _ = fmt.Fprintf(GinkgoWriter, "Created site (id=%s)\n", siteID)
+
+	// Create VPC
+	vpcID = createVPCViaAPI(token, orgName, siteID, prefix+"-vpc")
+
+	// Create IP block
+	ipBlockID := createIPBlockViaAPI(token, orgName, siteID, prefix+"-ipblock")
+
+	// Create subnet
+	subnetID = createSubnetViaAPI(token, orgName, vpcID, ipBlockID, prefix+"-subnet")
+
+	return siteID, vpcID, subnetID
+}
+
+// cleanupInfrastructureViaAPI deletes the infrastructure created by setupInfrastructureViaAPI.
+func cleanupInfrastructureViaAPI(token, orgName, subnetID, vpcID, siteID string) {
+	if subnetID != "" {
+		carbideAPIRequest("DELETE", fmt.Sprintf("/v2/org/%s/carbide/subnet/%s", orgName, subnetID), token, nil)
+	}
+	if vpcID != "" {
+		carbideAPIRequest("DELETE", fmt.Sprintf("/v2/org/%s/carbide/vpc/%s", orgName, vpcID), token, nil)
+	}
+	if siteID != "" {
+		carbideAPIRequest("DELETE", fmt.Sprintf("/v2/org/%s/carbide/site/%s", orgName, siteID), token, nil)
+	}
 }
