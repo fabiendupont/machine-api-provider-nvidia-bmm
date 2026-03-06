@@ -31,6 +31,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Increase inotify limits
+        run: sudo sysctl -w fs.inotify.max_user_instances=512
+
       - name: Deploy Carbide REST stack
         run: make kind-reset
         working-directory: bare-metal-manager-rest
