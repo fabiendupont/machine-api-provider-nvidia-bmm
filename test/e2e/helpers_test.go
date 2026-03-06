@@ -27,7 +27,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -187,56 +186,50 @@ func createSubnetViaAPI(token, orgName, vpcID, ipBlockID, name string) string {
 	return subnetID
 }
 
-// registerSiteInDB marks a site as Registered by updating PostgreSQL directly.
-func registerSiteInDB(siteID string) {
-	cmd := exec.Command("kubectl", "exec", "-n", "postgres", "statefulset/postgres", "--",
-		"psql", "-U", "forge", "-d", "forge", "-c",
-		fmt.Sprintf("UPDATE site SET status = 'Registered' WHERE id = '%s'", siteID))
-	cmd.Env = append(os.Environ(), "KUBECONFIG=/tmp/carbide-e2e-kubeconfig")
-	output, err := cmd.CombinedOutput()
-	Expect(err).NotTo(HaveOccurred(), "Failed to register site in DB: %s", string(output))
-	_, _ = fmt.Fprintf(GinkgoWriter, "Registered site %s in DB\n", siteID)
+// getExistingSiteID finds the local-dev-site created by setup-local.sh.
+func getExistingSiteID(token, orgName string) string {
+	endpoint := os.Getenv("NVIDIA_CARBIDE_API_ENDPOINT")
+	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
+
+	req, err := http.NewRequest("GET", endpoint+apiBase+"/site", nil)
+	Expect(err).NotTo(HaveOccurred())
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	Expect(err).NotTo(HaveOccurred())
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	Expect(err).NotTo(HaveOccurred())
+
+	var sites []map[string]interface{}
+	Expect(json.Unmarshal(body, &sites)).To(Succeed())
+	Expect(sites).NotTo(BeEmpty(), "No sites found — was setup-local.sh run?")
+
+	siteID := sites[0]["id"].(string)
+	siteName := sites[0]["name"].(string)
+	_, _ = fmt.Fprintf(GinkgoWriter, "Using existing site %s (id=%s)\n", siteName, siteID)
+	return siteID
 }
 
-// setupInfrastructureViaAPI creates the full Carbide infrastructure chain:
-// Infrastructure Provider -> Site (registered) -> Tenant -> IP Block -> Allocation -> VPC -> Subnet.
+// setupInfrastructureViaAPI uses the existing local-dev-site and creates
+// Tenant -> IP Block -> Allocation -> VPC -> Subnet.
 // Returns siteID, tenantID, vpcID, subnetID for use in tests.
 func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, tenantID, vpcID, subnetID string) {
 	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
 
-	// Step 1: Create Infrastructure Provider (idempotent)
-	carbideAPIRequest("POST", apiBase+"/infrastructure-provider", token, map[string]interface{}{
-		"org": orgName,
-	})
+	// Use the existing site (has a connected site-agent for Temporal workflows)
+	siteID = getExistingSiteID(token, orgName)
 
-	// Step 2: Create Site
-	siteResult, status := carbideAPIRequest("POST", apiBase+"/site", token, map[string]interface{}{
-		"name": prefix + "-site", "displayName": prefix + " Site",
-	})
-	Expect(status).To(Equal(http.StatusCreated), "Failed to create site: %v", siteResult)
-	siteID = siteResult["id"].(string)
-	_, _ = fmt.Fprintf(GinkgoWriter, "Created site (id=%s)\n", siteID)
-
-	// Register site in DB (must be Registered before VPC creation)
-	registerSiteInDB(siteID)
-
-	// Step 3: Create Tenant (idempotent)
-	tenantResult, _ := carbideAPIRequest("POST", apiBase+"/tenant", token, map[string]interface{}{
-		"org": orgName,
-	})
-	if id, ok := tenantResult["id"].(string); ok {
-		tenantID = id
-	} else {
-		currentTenant, tStatus := carbideAPIRequest("GET", apiBase+"/tenant/current", token, nil)
-		Expect(tStatus).To(Equal(http.StatusOK), "Failed to get current tenant: %v", currentTenant)
-		tenantID = currentTenant["id"].(string)
-	}
+	// Get or create Tenant (idempotent)
+	carbideAPIRequest("POST", apiBase+"/tenant", token, map[string]interface{}{"org": orgName})
+	currentTenant, tStatus := carbideAPIRequest("GET", apiBase+"/tenant/current", token, nil)
+	Expect(tStatus).To(Equal(http.StatusOK), "Failed to get current tenant: %v", currentTenant)
+	tenantID = currentTenant["id"].(string)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Tenant ID: %s\n", tenantID)
 
-	// Step 4: Create IP Block
+	// Create IP Block
 	ipBlockID := createIPBlockViaAPI(token, orgName, siteID, prefix+"-ipblock")
 
-	// Step 5: Create Allocation (links Tenant to Site with IP Block access)
+	// Create Allocation (links Tenant to Site with IP Block access)
 	allocResult, status := carbideAPIRequest("POST", apiBase+"/allocation", token, map[string]interface{}{
 		"name":     prefix + "-allocation",
 		"tenantId": tenantID,
@@ -247,10 +240,10 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, tenantID,
 	})
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create allocation: %v", allocResult)
 
-	// Step 6: Create VPC
+	// Create VPC
 	vpcID = createVPCViaAPI(token, orgName, siteID, prefix+"-vpc")
 
-	// Step 7: Create Subnet
+	// Create Subnet
 	subnetID = createSubnetViaAPI(token, orgName, vpcID, ipBlockID, prefix+"-subnet")
 
 	return siteID, tenantID, vpcID, subnetID
