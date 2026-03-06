@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -186,6 +187,17 @@ func createSubnetViaAPI(token, orgName, vpcID, ipBlockID, name string) string {
 	return subnetID
 }
 
+// registerSiteInDB marks a site as Registered by updating PostgreSQL directly.
+func registerSiteInDB(siteID string) {
+	cmd := exec.Command("kubectl", "exec", "-n", "postgres", "deploy/postgres", "--",
+		"psql", "-U", "forge", "-d", "forge", "-c",
+		fmt.Sprintf("UPDATE sites SET status = 'Registered' WHERE id = '%s'", siteID))
+	cmd.Env = append(os.Environ(), "KUBECONFIG=/tmp/carbide-e2e-kubeconfig")
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "Failed to register site in DB: %s", string(output))
+	_, _ = fmt.Fprintf(GinkgoWriter, "Registered site %s in DB\n", siteID)
+}
+
 // setupInfrastructureViaAPI creates the full infrastructure chain (site, VPC, IP block, subnet)
 // via the Carbide REST API and returns the IDs needed for instance creation.
 func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, subnetID string) {
@@ -198,6 +210,9 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, su
 	Expect(siteStatus).To(Equal(http.StatusCreated), "Failed to create site: %v", siteResult)
 	siteID = siteResult["id"].(string)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Created site (id=%s)\n", siteID)
+
+	// Register site in DB (site must be in Registered state before creating VPCs)
+	registerSiteInDB(siteID)
 
 	// Create VPC
 	vpcID = createVPCViaAPI(token, orgName, siteID, prefix+"-vpc")
