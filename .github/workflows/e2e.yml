@@ -10,6 +10,12 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      KUBECONFIG: /tmp/carbide-e2e-kubeconfig
+      NVIDIA_CARBIDE_API_ENDPOINT: http://localhost:8388
+      NVIDIA_CARBIDE_KEYCLOAK_URL: http://localhost:8082
+      NVIDIA_CARBIDE_API_ENDPOINT_INTERNAL: http://carbide-rest-api.carbide-rest.svc:8388
+      IMG: localhost/machine-api-provider-nvidia-carbide:e2e
     steps:
       - name: Checkout provider
         uses: actions/checkout@v4
@@ -42,41 +48,34 @@ jobs:
           echo "API health check failed"
           exit 1
 
+      - name: Export kubeconfig
+        run: kind get kubeconfig --name carbide-rest-local > $KUBECONFIG
+
       - name: Install Machine API CRDs
-        run: |
-          kind get kubeconfig --name carbide-rest-local > /tmp/carbide-e2e-kubeconfig
-          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/crd/external/
+        run: kubectl apply -f config/crd/external/
 
       - name: Build and load provider image
         run: |
-          make docker-build IMG=localhost/machine-api-provider-nvidia-carbide:e2e
-          kind load docker-image localhost/machine-api-provider-nvidia-carbide:e2e \
-            --name carbide-rest-local
+          make docker-build IMG=$IMG
+          kind load docker-image $IMG --name carbide-rest-local
 
       - name: Deploy provider controller
         run: |
-          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/manager/namespace.yaml
-          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/rbac/
-          sed -i 's|ghcr.io/fabiendupont/machine-api-provider-nvidia-carbide:latest|localhost/machine-api-provider-nvidia-carbide:e2e|' \
+          kubectl apply -f config/manager/namespace.yaml
+          kubectl apply -f config/rbac/
+          sed -i "s|ghcr.io/fabiendupont/machine-api-provider-nvidia-carbide:latest|$IMG|" \
             config/manager/deployment.yaml
-          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/manager/
-          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl wait \
-            --for=condition=Available deployment/controller-manager \
+          kubectl apply -f config/manager/
+          kubectl wait --for=condition=Available deployment/controller-manager \
             -n machine-api-provider-nvidia-carbide-system --timeout=5m
 
       - name: Run e2e tests
         run: |
           make test-e2e-live || true
           echo "=== Controller logs ==="
-          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl logs \
-            -l control-plane=controller-manager \
+          kubectl logs -l control-plane=controller-manager \
             -n machine-api-provider-nvidia-carbide-system --tail=100
           echo "=== Machine objects ==="
-          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl get machines.machine.openshift.io -A -o yaml || true
+          kubectl get machines.machine.openshift.io -A -o yaml || true
           # Fail if tests failed
           make test-e2e-live
-        env:
-          NVIDIA_CARBIDE_API_ENDPOINT: http://localhost:8388
-          NVIDIA_CARBIDE_KEYCLOAK_URL: http://localhost:8082
-          NVIDIA_CARBIDE_API_ENDPOINT_INTERNAL: http://carbide-rest-api.carbide-rest.svc:8388
-          IMG: localhost/machine-api-provider-nvidia-carbide:e2e
