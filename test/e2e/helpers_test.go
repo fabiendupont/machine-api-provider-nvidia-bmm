@@ -191,7 +191,7 @@ func createSubnetViaAPI(token, orgName, vpcID, ipBlockID, name string) string {
 func registerSiteInDB(siteID string) {
 	cmd := exec.Command("kubectl", "exec", "-n", "postgres", "statefulset/postgres", "--",
 		"psql", "-U", "forge", "-d", "forge", "-c",
-		fmt.Sprintf("UPDATE sites SET status = 'Registered' WHERE id = '%s'", siteID))
+		fmt.Sprintf("UPDATE site SET status = 'Registered' WHERE id = '%s'", siteID))
 	cmd.Env = append(os.Environ(), "KUBECONFIG=/tmp/carbide-e2e-kubeconfig")
 	output, err := cmd.CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), "Failed to register site in DB: %s", string(output))
