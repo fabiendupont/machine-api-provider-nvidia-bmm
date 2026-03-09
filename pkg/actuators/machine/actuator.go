@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -179,6 +180,10 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	if err != nil {
 		if a.eventRecorder != nil {
 			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedCreate", "Failed to create instance: %v", err)
+		}
+		if httpResp != nil && httpResp.Body != nil {
+			respBody, _ := io.ReadAll(httpResp.Body)
+			return fmt.Errorf("failed to create instance (status %d): %s: %w", httpResp.StatusCode, string(respBody), err)
 		}
 		return fmt.Errorf("failed to create instance: %w", err)
 	}
