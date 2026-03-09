@@ -236,8 +236,8 @@ func getInfraProviderID(token, orgName string) string {
 // controller to use with machineId (bypassing instanceTypeId).
 func createTestMachineInDB(siteID, infraProviderID, machineID string) {
 	sql := fmt.Sprintf(
-		"INSERT INTO machine (id, infrastructure_provider_id, site_id, controller_machine_id, status, is_in_maintenance, is_usable_by_tenant, created, updated) "+
-			"VALUES ('%s', '%s', '%s', '%s', 'Ready', false, true, NOW(), NOW()) ON CONFLICT (id) DO NOTHING",
+		"INSERT INTO machine (id, infrastructure_provider_id, site_id, controller_machine_id, status, is_in_maintenance, is_usable_by_tenant, is_network_degraded, is_assigned, is_missing_on_site, created, updated) "+
+			"VALUES ('%s', '%s', '%s', '%s', 'Ready', false, true, false, false, false, NOW(), NOW()) ON CONFLICT (id) DO NOTHING",
 		machineID, infraProviderID, siteID, machineID)
 	cmd := exec.Command("kubectl", "exec", "-n", "postgres", "statefulset/postgres", "--",
 		"psql", "-U", "forge", "-d", "forge", "-c", sql)
