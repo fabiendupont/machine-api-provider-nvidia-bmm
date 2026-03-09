@@ -93,17 +93,19 @@ var _ = Describe("Live Machine API Provider E2E", Label("live"), func() {
 			machineName := fmt.Sprintf("e2e-live-machine-%d", time.Now().Unix())
 
 			By("Setting up infrastructure via Carbide API")
-			siteID, tenantID, vpcID, subnetID := setupInfrastructureViaAPI(token, testOrgName, machineName)
+			siteID, tenantID, vpcID, subnetID, instanceTypeID := setupInfrastructureViaAPI(token, testOrgName, machineName)
 
 			By("Creating credentials secret")
 			secret := createCredentialsSecret(ctx, k8sClient, fmt.Sprintf("%s-creds", machineName), testNamespace, token)
 
 			By("Building provider spec")
 			providerSpec := &v1beta1.NvidiaCarbideMachineProviderSpec{
-				SiteID:   siteID,
-				TenantID: tenantID,
-				VpcID:    vpcID,
-				SubnetID: subnetID,
+				SiteID:         siteID,
+				TenantID:       tenantID,
+				VpcID:          vpcID,
+				SubnetID:       subnetID,
+				InstanceTypeID: instanceTypeID,
+				UserData:       "#!ipxe\necho e2e-test",
 				CredentialsSecret: v1beta1.CredentialsSecretReference{
 					Name:      secret.Name,
 					Namespace: testNamespace,

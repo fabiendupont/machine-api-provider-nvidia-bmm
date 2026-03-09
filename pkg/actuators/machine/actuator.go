@@ -138,6 +138,9 @@ func buildInstanceRequest(
 	if providerSpec.UserData != "" {
 		userData := providerSpec.UserData
 		req.UserData = *bmm.NewNullableString(&userData)
+		// The API requires either ipxeScript or operatingSystemId.
+		// Use userData as the iPXE script when no OS is specified.
+		req.IpxeScript = *bmm.NewNullableString(&userData)
 	}
 	if len(providerSpec.SSHKeyGroupIDs) > 0 {
 		req.SshKeyGroupIds = providerSpec.SSHKeyGroupIDs
