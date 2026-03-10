@@ -105,7 +105,7 @@ var _ = Describe("Live Machine API Provider E2E", Label("live"), func() {
 				VpcID:     vpcID,
 				SubnetID:  subnetID,
 				MachineID: machineID,
-				UserData:  "#!ipxe\necho e2e-test",
+				UserData:  "#cloud-config\nruncmd:\n  - echo e2e-test",
 				CredentialsSecret: v1beta1.CredentialsSecretReference{
 					Name:      secret.Name,
 					Namespace: testNamespace,
