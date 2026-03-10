@@ -391,7 +391,8 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 			}
 			return fmt.Errorf("failed to delete instance: %w", err)
 		}
-	} else if httpResp.StatusCode != 200 && httpResp.StatusCode != 202 && httpResp.StatusCode != 204 && httpResp.StatusCode != 404 {
+	} else if httpResp.StatusCode != 200 && httpResp.StatusCode != 202 &&
+		httpResp.StatusCode != 204 && httpResp.StatusCode != 404 {
 		// Accept 200 (OK), 202 (Accepted/async), 204 (No Content), 404 (already gone)
 		if a.eventRecorder != nil {
 			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedDelete",
